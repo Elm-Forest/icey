@@ -46,6 +46,10 @@ final class GeneralSettings: ObservableObject {
     /// in when it opens and out when it closes.
     @Published var animateIceBar = false
 
+    /// Closes the Ice Bar after the pointer has been outside both the
+    /// bar and the menu bar for two consecutive seconds.
+    @Published var iceBarAutoCloseOnPointerExit = false
+
     /// A Boolean value that indicates whether the hidden section
     /// should be shown when the mouse pointer clicks in an empty
     /// area of the menu bar.
@@ -104,6 +108,7 @@ final class GeneralSettings: ObservableObject {
         Defaults.ifPresent(key: .customIceIconIsTemplate, assign: &customIceIconIsTemplate)
         Defaults.ifPresent(key: .useIceBar, assign: &useIceBar)
         Defaults.ifPresent(key: .animateIceBar, assign: &animateIceBar)
+        Defaults.ifPresent(key: .iceBarAutoCloseOnPointerExit, assign: &iceBarAutoCloseOnPointerExit)
         Defaults.ifPresent(key: .showOnClick, assign: &showOnClick)
         Defaults.ifPresent(key: .showOnHover, assign: &showOnHover)
         Defaults.ifPresent(key: .showOnScroll, assign: &showOnScroll)
@@ -224,6 +229,13 @@ final class GeneralSettings: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { animate in
                 Defaults.set(animate, forKey: .animateIceBar)
+            }
+            .store(in: &c)
+
+        $iceBarAutoCloseOnPointerExit
+            .receive(on: DispatchQueue.main)
+            .sink { enabled in
+                Defaults.set(enabled, forKey: .iceBarAutoCloseOnPointerExit)
             }
             .store(in: &c)
 

@@ -41,6 +41,9 @@ jobs:
           echo "=== End of build log ==="
           tail -n 35 "$RUNNER_TEMP/icey-build.log"
           exit "$result"
+      - name: Run unit tests
+        shell: bash
+        run: swift test --parallel
       - name: Verify and package
         shell: bash
         run: |

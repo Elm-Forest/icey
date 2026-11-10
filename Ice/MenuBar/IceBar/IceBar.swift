@@ -24,6 +24,10 @@ final class IceBarPanel: NSPanel {
     /// has since been closed or shown again.
     private var presentationID = 0
 
+    /// Active only while the panel is shown and pointer-exit closing is enabled.
+    private var pointerExitTimer: Timer?
+    private var pointerOutsideSince: ContinuousClock.Instant?
+
     /// Storage for internal observers.
     private var cancellables = Set<AnyCancellable>()
 
@@ -134,7 +138,62 @@ final class IceBarPanel: NSPanel {
                 .store(in: &c)
         }
 
+        appState?.settings.general.$iceBarAutoCloseOnPointerExit
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                self?.updatePointerExitTimer(enabled: enabled)
+            }
+            .store(in: &c)
+
         cancellables = c
+    }
+
+    /// Runs at a low frequency only while the optional 2-second close behavior
+    /// is enabled and the Ice Bar is actually visible.
+    private func updatePointerExitTimer(enabled: Bool) {
+        pointerExitTimer?.invalidate()
+        pointerExitTimer = nil
+        pointerOutsideSince = nil
+        guard enabled, isVisible, !isFadingOut, currentSection != nil else { return }
+
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.checkPointerExit()
+            }
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        pointerExitTimer = timer
+    }
+
+    private func checkPointerExit() {
+        guard
+            let appState,
+            MouseHelpers.locationAppKit != nil,
+            isVisible,
+            !isFadingOut,
+            currentSection != nil
+        else {
+            pointerOutsideSince = nil
+            return
+        }
+
+        // Check every menu bar, including an external display's menu bar.
+        // The pointer could have crossed screens without leaving that area.
+        let insideAnyMenuBar = NSScreen.screens.contains { screen in
+            appState.hidEventManager.isMouseInsideMenuBar(appState: appState, screen: screen)
+        }
+        let isInside = insideAnyMenuBar || appState.hidEventManager.isMouseInsideIceBar(appState: appState)
+
+        if isInside {
+            pointerOutsideSince = nil
+        } else if let pointerOutsideSince {
+            if ContinuousClock.now - pointerOutsideSince >= .seconds(2) {
+                hide()
+            }
+        } else {
+            pointerOutsideSince = .now
+        }
     }
 
     /// Updates the panel's frame origin for display on the given screen.
@@ -305,6 +364,7 @@ final class IceBarPanel: NSPanel {
         }
 
         orderFrontRegardless()
+        updatePointerExitTimer(enabled: appState.settings.general.iceBarAutoCloseOnPointerExit)
         if isFadingIn {
             // Not awaited: the caller should not wait for the fade.
             NSAnimationContext.runAnimationGroup({ context in
@@ -340,6 +400,7 @@ final class IceBarPanel: NSPanel {
     }
 
     override func close() {
+        updatePointerExitTimer(enabled: false)
         presentationID &+= 1
 
         guard fades, isVisible else {
@@ -600,6 +661,15 @@ private struct IceBarItemView: View {
                     await ItemClicker27.click(item: item, mouseButton: .left, iceBarDisplayID: iceBarDisplayID, appState: appState)
                     return
                 }
+                if itemManager.canClickInPlace(item) {
+                    do {
+                        try await itemManager.click(item: item, with: .left)
+                    } catch {
+                        Logger.default.error("Could not click a visible Ice Bar item: \(error, privacy: .public)")
+                        NSSound.beep()
+                    }
+                    return
+                }
                 if !(await IceBarAccessibilityClicker.click(item: item, mouseButton: .left)) {
                     NSSound.beep()
                 }
@@ -618,6 +688,15 @@ private struct IceBarItemView: View {
                 try await Task.sleep(for: .milliseconds(25))
                 if #available(macOS 27.0, *), let appState = itemManager.appState {
                     await ItemClicker27.click(item: item, mouseButton: .right, iceBarDisplayID: iceBarDisplayID, appState: appState)
+                    return
+                }
+                if itemManager.canClickInPlace(item) {
+                    do {
+                        try await itemManager.click(item: item, with: .right)
+                    } catch {
+                        Logger.default.error("Could not click a visible Ice Bar item: \(error, privacy: .public)")
+                        NSSound.beep()
+                    }
                     return
                 }
                 if !(await IceBarAccessibilityClicker.click(item: item, mouseButton: .right)) {

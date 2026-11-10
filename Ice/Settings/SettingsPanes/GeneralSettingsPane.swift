@@ -199,6 +199,7 @@ struct GeneralSettingsPane: View {
             }
             iceBarLocationPicker
             animateIceBar
+            iceBarAutoCloseOnPointerExit
         }
     }
 
@@ -283,6 +284,12 @@ struct GeneralSettingsPane: View {
     private var animateIceBar: some View {
         Toggle("Fade in and out", isOn: $settings.animateIceBar)
             .annotation("Fade the Ice Bar in when it opens and out when it closes.")
+    }
+
+    @ViewBuilder
+    private var iceBarAutoCloseOnPointerExit: some View {
+        Toggle("Close Ice Bar after pointer leaves", isOn: $settings.iceBarAutoCloseOnPointerExit)
+            .annotation("Automatically close the Ice Bar after the pointer has been outside both it and the menu bar for 2 seconds. Moving back into either area cancels the countdown.")
     }
 
     // MARK: Show Options

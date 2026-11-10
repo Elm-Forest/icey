@@ -41,10 +41,10 @@ enum IceBarAccessibilityClicker {
             logger.debug("Activated \(item.logString, privacy: .public) using \(action, privacy: .public) without moving it")
             return true
         case .indeterminate:
-            // A menu-owning app can stay in its modal action until the menu
-            // closes; kAXErrorCannotComplete does not prove the click failed.
-            logger.notice("Accessibility action timed out for \(item.logString, privacy: .public); not pressing twice")
-            return true
+            // A timed-out AX action is not proof of a successful click.
+            // Callers must not silently dismiss this failure as success.
+            logger.error("Accessibility activation was not confirmed for \(item.logString, privacy: .public)")
+            return false
         case .unavailable(let reason):
             logger.error("Could not activate \(item.logString, privacy: .public) without moving it: \(reason, privacy: .public)")
             return false
@@ -101,24 +101,74 @@ enum IceBarAccessibilityClicker {
             return .unavailable("No unique accessibility item matched the status window")
         }
 
+        // Keep a before/after snapshot: some NSStatusItem accessibility
+        // actions return cannotComplete when opening a modal popup. A timeout
+        // without a newly displayed interface is not success.
+        let originalWindows = onScreenWindowIDs(ownerPID: pid)
         AXUIElementSetMessagingTimeout(candidate.element, 1)
         var result = AXUIElementPerformAction(candidate.element, action as CFString)
-        if result == .actionUnsupported {
-            // Some status items wrap their actionable button in an AX group.
-            // Only descend if there is exactly one child to avoid clicking a
-            // different status item within the same application.
-            let nested = children(of: candidate.element)
-            if nested.count == 1 {
-                AXUIElementSetMessagingTimeout(nested[0], 1)
-                result = AXUIElementPerformAction(nested[0], action as CFString)
+        if result == .success {
+            return .success
+        }
+        if aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
+            return .success
+        }
+
+        // Some items expose the actionable button one level under the menu
+        // bar item. Only try it if there is one unambiguous child and there
+        // was no observable interface from the initial action.
+        let nested = children(of: candidate.element)
+        if nested.count == 1 {
+            AXUIElementSetMessagingTimeout(nested[0], 1)
+            result = AXUIElementPerformAction(nested[0], action as CFString)
+            if result == .success || aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
+                return .success
+            }
+        }
+
+        // AXPress and AXShowMenu are distinct actions. Some menu-only apps
+        // implement one but not the other; try AXShowMenu only when AXPress
+        // failed and no interface was observed, without rearranging icons.
+        if action == kAXPressAction as String {
+            AXUIElementSetMessagingTimeout(candidate.element, 1)
+            result = AXUIElementPerformAction(candidate.element, kAXShowMenuAction as CFString)
+            if result == .success || aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
+                return .success
             }
         }
 
         switch result {
-        case .success: return .success
         case .cannotComplete: return .indeterminate
         default: return .unavailable("AX action returned \(result.rawValue)")
         }
+    }
+
+    /// A target app can display its menu while the AX action is blocked in
+    /// its run loop; look for new on-screen windows before retrying.
+    private nonisolated static func onScreenWindowIDs(ownerPID: pid_t) -> Set<CGWindowID> {
+        let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        return Set(windows.compactMap { info in
+            guard
+                let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                pid == ownerPID,
+                let number = info[kCGWindowNumber as String] as? CGWindowID
+            else {
+                return nil
+            }
+            return number
+        })
+    }
+
+    private nonisolated static func aNewInterfaceAppeared(
+        ownerPID: pid_t,
+        before: Set<CGWindowID>
+    ) -> Bool {
+        // Give the target process a short grace period to create its popup.
+        Thread.sleep(forTimeInterval: 0.15)
+        return !onScreenWindowIDs(ownerPID: ownerPID).subtracting(before).isEmpty
     }
 
     private nonisolated static func matching(
