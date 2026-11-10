@@ -13,8 +13,17 @@ import OSLog
 @MainActor
 enum IceBarAccessibilityClicker {
     private static let logger = Logger(category: "IceBarAccessibilityClicker")
+    private static var activationInProgress = false
 
     static func click(item: MenuBarItem, mouseButton: CGMouseButton) async -> Bool {
+        // Do not interleave operations on two status items while the target
+        // process is handling a potentially modal Accessibility action.
+        guard !activationInProgress else {
+            logger.notice("An Ice Bar item activation is already in progress")
+            return false
+        }
+        activationInProgress = true
+        defer { activationInProgress = false }
         let pid = item.sourcePID ?? item.ownerPID
         let bounds = Bridging.getWindowBounds(for: item.windowID) ?? item.bounds
         let title = item.title
