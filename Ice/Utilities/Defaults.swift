@@ -146,7 +146,6 @@ extension Defaults {
         case iceBarDisplays = "IceBarDisplays"
         case iceBarWidthThreshold = "IceBarWidthThreshold"
         case animateIceBar = "AnimateIceBar"
-        case iceBarAutoCloseOnPointerExit = "IceBarAutoCloseOnPointerExit"
         case showOnClick = "ShowOnClick"
         case showOnHover = "ShowOnHover"
         case showOnScroll = "ShowOnScroll"

@@ -46,10 +46,6 @@ final class GeneralSettings: ObservableObject {
     /// in when it opens and out when it closes.
     @Published var animateIceBar = false
 
-    /// Closes the Ice Bar after the pointer has been outside both the
-    /// bar and the menu bar for two consecutive seconds.
-    @Published var iceBarAutoCloseOnPointerExit = false
-
     /// A Boolean value that indicates whether the hidden section
     /// should be shown when the mouse pointer clicks in an empty
     /// area of the menu bar.
@@ -108,13 +104,16 @@ final class GeneralSettings: ObservableObject {
         Defaults.ifPresent(key: .customIceIconIsTemplate, assign: &customIceIconIsTemplate)
         Defaults.ifPresent(key: .useIceBar, assign: &useIceBar)
         Defaults.ifPresent(key: .animateIceBar, assign: &animateIceBar)
-        Defaults.ifPresent(key: .iceBarAutoCloseOnPointerExit, assign: &iceBarAutoCloseOnPointerExit)
         Defaults.ifPresent(key: .showOnClick, assign: &showOnClick)
         Defaults.ifPresent(key: .showOnHover, assign: &showOnHover)
         Defaults.ifPresent(key: .showOnScroll, assign: &showOnScroll)
         Defaults.ifPresent(key: .itemSpacingOffset, assign: &itemSpacingOffset)
         Defaults.ifPresent(key: .autoRehide, assign: &autoRehide)
-        Defaults.ifPresent(key: .rehideInterval, assign: &rehideInterval)
+        Defaults.ifPresent(key: .rehideInterval) { (interval: Double) in
+            if interval.isFinite {
+                rehideInterval = (interval.clamped(to: 0.5...300) * 2).rounded() / 2
+            }
+        }
 
         Defaults.ifPresent(key: .iceBarLocation) { rawValue in
             if let location = IceBarLocation(rawValue: rawValue) {
@@ -232,13 +231,6 @@ final class GeneralSettings: ObservableObject {
             }
             .store(in: &c)
 
-        $iceBarAutoCloseOnPointerExit
-            .receive(on: DispatchQueue.main)
-            .sink { enabled in
-                Defaults.set(enabled, forKey: .iceBarAutoCloseOnPointerExit)
-            }
-            .store(in: &c)
-
         $showOnClick
             .receive(on: DispatchQueue.main)
             .sink { showOnClick in
@@ -285,7 +277,8 @@ final class GeneralSettings: ObservableObject {
         $rehideInterval
             .receive(on: DispatchQueue.main)
             .sink { interval in
-                Defaults.set(interval, forKey: .rehideInterval)
+                let safeInterval = interval.isFinite ? interval.clamped(to: 0.5...300) : 15
+                Defaults.set((safeInterval * 2).rounded() / 2, forKey: .rehideInterval)
             }
             .store(in: &c)
 

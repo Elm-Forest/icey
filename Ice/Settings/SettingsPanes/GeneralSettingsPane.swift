@@ -28,7 +28,7 @@ struct GeneralSettingsPane: View {
         let interval = settings.rehideInterval
         // A minute or more reads better in minutes, such as "2 min, 30 sec",
         // formatted in the user's language.
-        if interval >= 60, let seconds = Int(exactly: interval.rounded()) {
+        if interval >= 60, interval.rounded() == interval, let seconds = Int(exactly: interval) {
             let formatted = Duration.seconds(seconds).formatted(.units(allowed: [.minutes, .seconds], width: .abbreviated))
             return "\(formatted)"
         }
@@ -199,7 +199,6 @@ struct GeneralSettingsPane: View {
             }
             iceBarLocationPicker
             animateIceBar
-            iceBarAutoCloseOnPointerExit
         }
     }
 
@@ -286,12 +285,6 @@ struct GeneralSettingsPane: View {
             .annotation("Fade the Ice Bar in when it opens and out when it closes.")
     }
 
-    @ViewBuilder
-    private var iceBarAutoCloseOnPointerExit: some View {
-        Toggle("Close Ice Bar after pointer leaves", isOn: $settings.iceBarAutoCloseOnPointerExit)
-            .annotation("Automatically close the Ice Bar after the pointer has been outside both it and the menu bar for 2 seconds. Moving back into either area cancels the countdown.")
-    }
-
     // MARK: Show Options
 
     @ViewBuilder
@@ -348,8 +341,8 @@ struct GeneralSettingsPane: View {
                 IceSlider(
                     rehideIntervalKey,
                     value: $settings.rehideInterval,
-                    in: 0...300,
-                    step: 1
+                    in: 0.5...300,
+                    step: 0.5
                 )
             }
         }
