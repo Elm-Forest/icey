@@ -32,7 +32,6 @@ enum IceBarAccessibilityClicker {
         let bounds = window.bounds
         let displays = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
         let bundle = item.sourceApplication?.bundleURL
-        let isICopy = item.tag.namespace == .string("cn.better365.iCopy")
         let isWiFi = item.tag.namespace == .controlCenter && item.tag.title == "WiFi"
         let title = item.title
         let tagTitle = item.tag.title
@@ -49,7 +48,6 @@ enum IceBarAccessibilityClicker {
                     tagTitle: tagTitle,
                     action: action,
                     displays: displays,
-                    isICopy: isICopy,
                     wifiBundle: isWiFi ? bundle : nil
                 )
                 continuation.resume(returning: outcome)
@@ -176,7 +174,6 @@ enum IceBarAccessibilityClicker {
         tagTitle: String,
         action: String,
         displays: [CGRect],
-        isICopy: Bool,
         wifiBundle: URL?
     ) -> Outcome {
         let app = AXUIElementCreateApplication(pid)
@@ -210,16 +207,22 @@ enum IceBarAccessibilityClicker {
             return .unavailable("No unique accessibility item matched the status window")
         }
 
-        // iCopy exposes its menu even while closed. On Sequoia both mouse
-        // buttons open this same menu thousands of points off the display.
-        if isICopy, let menu = children(of: candidate.element).first(where: { role($0) == kAXMenuRole }) {
-            var budget = 128
-            if let entries = entries(in: menu, budget: &budget), !entries.isEmpty {
-                return .commands(entries)
-            }
-        }
         if let wifiBundle, candidate.names.contains("com.apple.menuextra.wifi") {
             return openWiFi(app: app, candidates: candidates, bundleURL: wifiBundle, displays: displays)
+        }
+
+        // Status items from different apps may expose their complete NSMenu
+        // through Accessibility even when their physical icon is far outside
+        // the display. Mirror that menu in the Ice Bar without requiring a
+        // synthetic click or moving the status item. This was previously
+        // restricted to iCopy even though it is an AX capability, not a
+        // property of that particular application.
+        if let menu = children(of: candidate.element).first(where: { role($0) == kAXMenuRole }) {
+            var budget = 128
+            if let entries = entries(in: menu, budget: &budget), !entries.isEmpty {
+                logger.info("Using accessible status menu for pid=\(pid), entryCount=\(entries.count)")
+                return .commands(entries)
+            }
         }
 
         // A successful AX call can open an invisible menu. Conversely, a
