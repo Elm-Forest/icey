@@ -186,9 +186,11 @@ enum IceBarAccessibilityClicker {
         var sizeValue: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
-            let position = positionValue as? AXValue,
+            let positionValue,
+            CFGetTypeID(positionValue) == AXValueGetTypeID(),
             AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
-            let size = sizeValue as? AXValue
+            let sizeValue,
+            CFGetTypeID(sizeValue) == AXValueGetTypeID()
         else {
             return nil
         }
@@ -196,8 +198,8 @@ enum IceBarAccessibilityClicker {
         var origin = CGPoint.zero
         var dimensions = CGSize.zero
         guard
-            AXValueGetValue(position, .cgPoint, &origin),
-            AXValueGetValue(size, .cgSize, &dimensions)
+            AXValueGetValue(positionValue as AXValue, .cgPoint, &origin),
+            AXValueGetValue(sizeValue as AXValue, .cgSize, &dimensions)
         else {
             return nil
         }
