@@ -1,11 +1,12 @@
 name: Build Icey (macOS arm64)
 
 on:
-  push:
-    branches:
-      - fix/icebar-hidden-item-click
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: arm64-build-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,7 +14,9 @@ permissions:
 jobs:
   build:
     name: Release build
-    runs-on: macos-26
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
