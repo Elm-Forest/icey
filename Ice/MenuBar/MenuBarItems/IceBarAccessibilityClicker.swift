@@ -71,8 +71,60 @@ enum IceBarAccessibilityClicker {
             }
         case .unavailable(let reason):
             logger.notice("No visible interface for \(item.logString, privacy: .public): \(reason, privacy: .public)")
+            // A normal desktop app may use its status item to reopen its main
+            // window rather than show a menu. The offscreen status item does
+            // not always deliver that event, even when AXPress succeeds.
+            // Reopen only regular apps on a left click, never move the icon.
+            if mouseButton == .left, await reopenDesktopApplication(for: item) {
+                return
+            }
             showUnavailable(for: item, at: point)
         }
+    }
+
+    /// Reopen an ordinary app through Launch Services if its hidden status
+    /// item did not produce a visible interface. This intentionally excludes
+    /// accessory/background apps and right-click actions: a status-only
+    /// utility's menu is not interchangeable with its application window.
+    private static func reopenDesktopApplication(for item: MenuBarItem) async -> Bool {
+        guard
+            let application = item.sourceApplication ?? item.owningApplication,
+            application.activationPolicy == .regular,
+            let bundleURL = application.bundleURL
+        else {
+            return false
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        do {
+            let reopened = try await NSWorkspace.shared.openApplication(
+                at: bundleURL,
+                configuration: configuration
+            )
+            // The Launch Services request can succeed without an app
+            // actually presenting a window. Verify the observable result.
+            for _ in 0..<12 {
+                let displays = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
+                let hasMainWindow = WindowInfo.createWindows(option: .onScreen).contains { window in
+                    window.ownerPID == reopened.processIdentifier &&
+                        window.layer == 0 &&
+                        displays.contains { $0.intersects(window.bounds) } &&
+                        window.bounds.width > 80 &&
+                        window.bounds.height > 60
+                }
+                if hasMainWindow, reopened.isActive {
+                    logger.notice("Reopened desktop application \(application.bundleIdentifier ?? "unknown", privacy: .public) from Ice Bar")
+                    return true
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            logger.warning("Launch Services returned but no active desktop window appeared for \(item.logString, privacy: .public)")
+        } catch {
+            logger.error("Could not reopen desktop application for \(item.logString, privacy: .public): \(error, privacy: .public)")
+        }
+        return false
     }
 
     private static func showUnavailable(for item: MenuBarItem, at point: CGPoint) {
