@@ -109,7 +109,11 @@ final class GeneralSettings: ObservableObject {
         Defaults.ifPresent(key: .showOnScroll, assign: &showOnScroll)
         Defaults.ifPresent(key: .itemSpacingOffset, assign: &itemSpacingOffset)
         Defaults.ifPresent(key: .autoRehide, assign: &autoRehide)
-        Defaults.ifPresent(key: .rehideInterval, assign: &rehideInterval)
+        Defaults.ifPresent(key: .rehideInterval) { (interval: Double) in
+            if interval.isFinite {
+                rehideInterval = (interval.clamped(to: 0.5...300) * 2).rounded() / 2
+            }
+        }
 
         Defaults.ifPresent(key: .iceBarLocation) { rawValue in
             if let location = IceBarLocation(rawValue: rawValue) {
@@ -273,7 +277,8 @@ final class GeneralSettings: ObservableObject {
         $rehideInterval
             .receive(on: DispatchQueue.main)
             .sink { interval in
-                Defaults.set(interval, forKey: .rehideInterval)
+                let safeInterval = interval.isFinite ? interval.clamped(to: 0.5...300) : 15
+                Defaults.set((safeInterval * 2).rounded() / 2, forKey: .rehideInterval)
             }
             .store(in: &c)
 

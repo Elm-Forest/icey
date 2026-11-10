@@ -6255,6 +6255,16 @@
         }
       }
     },
+    "Couldn’t open %@ here" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法在此处打开%@"
+          }
+        }
+      }
+    },
     "Could not create event for \"%@\"" : {
       "localizations" : {
         "cs" : {

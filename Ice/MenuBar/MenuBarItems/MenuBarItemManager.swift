@@ -1465,6 +1465,14 @@ extension MenuBarItemManager {
                     return
                 }
                 try await postMoveEvents(item: item, destination: destination)
+                // A response to the drag events does not guarantee that the item
+                // actually reached the target. Verify its final position before
+                // proceeding to click it in the Ice Bar.
+                await waitForItemToSettle(item)
+                guard try await itemHasCorrectPosition(item: item, for: destination) else {
+                    logger.debug("Attempt \(n, privacy: .public) moved the item but missed its destination")
+                    throw EventError.itemResponseTimeout(item)
+                }
                 logger.debug("Attempt \(n, privacy: .public) succeeded, finished with move")
                 return
             } catch {
@@ -1923,8 +1931,14 @@ extension MenuBarItemManager {
         do {
             try await move(item: item, to: .leftOfItem(targetItem))
         } catch {
-            logger.error("Error showing item: \(error, privacy: .public)")
-            return
+            // macOS can move the item even when the synthetic event handshake
+            // times out. If it made it onto a display, still try the click
+            // instead of discarding an otherwise usable move.
+            guard canClickInPlace(item) else {
+                logger.error("Error showing item: \(error, privacy: .public)")
+                return
+            }
+            logger.warning("Move reported \(error, privacy: .public), but \(item.logString, privacy: .public) is on screen; attempting click")
         }
 
         let context = TemporarilyShownItemContext(item: item, returnDestination: destination, returnSection: returnSection)

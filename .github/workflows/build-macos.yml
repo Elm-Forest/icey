@@ -1,0 +1,64 @@
+name: Build Icey (macOS arm64)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: arm64-build-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Release build
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Xcode
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+      - name: Build Release (ad-hoc signed)
+        shell: bash
+        run: |
+          set +e
+          xcodebuild -project Ice.xcodeproj -scheme Ice -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/icey-derived" build \
+            ENABLE_HARDENED_RUNTIME=NO CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES ARCHS=arm64 \
+            DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            > "$RUNNER_TEMP/icey-build.log" 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then
+            echo "=== Compiler errors ==="
+            grep -nE 'error:|fatal error:|BUILD FAILED' "$RUNNER_TEMP/icey-build.log" | tail -n 70 || true
+          fi
+          echo "=== End of build log ==="
+          tail -n 35 "$RUNNER_TEMP/icey-build.log"
+          exit "$result"
+      - name: Run unit tests
+        shell: bash
+        run: swift test --parallel
+      - name: Verify and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/icey-derived/Build/Products/Release/Icey.app"
+          test -d "$APP"
+          codesign --verify --deep --strict "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Icey-arm64-test-build.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Icey-arm64-test-build
+          path: ${{ runner.temp }}/Icey-arm64-test-build.zip
+          if-no-files-found: error
+          retention-days: 7

@@ -592,6 +592,7 @@ private struct IceBarItemView: View {
             guard let itemManager, let menuBarManager else {
                 return
             }
+            let point = NSEvent.mouseLocation
             let iceBarDisplayID = menuBarManager.iceBarPanel.screen?.displayID
             menuBarManager.section(withName: section)?.hide()
             Task {
@@ -601,10 +602,15 @@ private struct IceBarItemView: View {
                     return
                 }
                 if itemManager.canClickInPlace(item) {
-                    try await itemManager.click(item: item, with: .left)
-                } else {
-                    await itemManager.temporarilyShow(item: item, clickingWith: .left)
+                    do {
+                        try await itemManager.click(item: item, with: .left)
+                    } catch {
+                        Logger.default.error("Could not click a visible Ice Bar item: \(error, privacy: .public)")
+                        NSSound.beep()
+                    }
+                    return
                 }
+                await IceBarAccessibilityClicker.click(item: item, mouseButton: .left, at: point)
             }
         }
     }
@@ -614,6 +620,7 @@ private struct IceBarItemView: View {
             guard let itemManager, let menuBarManager else {
                 return
             }
+            let point = NSEvent.mouseLocation
             let iceBarDisplayID = menuBarManager.iceBarPanel.screen?.displayID
             menuBarManager.section(withName: section)?.hide()
             Task {
@@ -623,10 +630,15 @@ private struct IceBarItemView: View {
                     return
                 }
                 if itemManager.canClickInPlace(item) {
-                    try await itemManager.click(item: item, with: .right)
-                } else {
-                    await itemManager.temporarilyShow(item: item, clickingWith: .right)
+                    do {
+                        try await itemManager.click(item: item, with: .right)
+                    } catch {
+                        Logger.default.error("Could not click a visible Ice Bar item: \(error, privacy: .public)")
+                        NSSound.beep()
+                    }
+                    return
                 }
+                await IceBarAccessibilityClicker.click(item: item, mouseButton: .right, at: point)
             }
         }
     }

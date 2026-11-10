@@ -1,0 +1,43 @@
+workflows:
+  icey-macos-arm64:
+    name: Icey macOS ARM64 (manual test build)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: '26.3'
+    scripts:
+      - name: Verify Xcode
+        script: |
+          sw_vers
+          xcodebuild -version
+          xcrun --show-sdk-version
+      - name: Build Release (ad-hoc signed)
+        script: |
+          set -eu
+          mkdir -p build
+          if xcodebuild -project Ice.xcodeproj -scheme Ice -configuration Release \
+              -destination 'platform=macOS' \
+              -derivedDataPath "$CM_BUILD_DIR/build/DerivedData" build \
+              ENABLE_HARDENED_RUNTIME=NO CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+              CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES ARCHS=arm64 \
+              DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+              > build/icey-build.log 2>&1; then
+            tail -n 30 build/icey-build.log
+          else
+            grep -nE 'error:|fatal error:|BUILD FAILED' build/icey-build.log | tail -n 50 || true
+            tail -n 40 build/icey-build.log
+            exit 1
+          fi
+      - name: Run Swift package tests
+        script: swift test --parallel
+      - name: Verify and package app
+        script: |
+          set -eu
+          APP="$CM_BUILD_DIR/build/DerivedData/Build/Products/Release/Icey.app"
+          test -d "$APP"
+          codesign --verify --deep --strict "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist"
+          ditto -c -k --keepParent "$APP" "$CM_BUILD_DIR/build/Icey-arm64-test-build.zip"
+    artifacts:
+      - build/Icey-arm64-test-build.zip
+      - build/icey-build.log
