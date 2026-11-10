@@ -76,11 +76,15 @@ enum IceBarAccessibilityClicker {
         var barValue: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(app, kAXExtrasMenuBarAttribute as CFString, &barValue) == .success,
-            let bar = barValue as? AXUIElement
+            let barValue,
+            CFGetTypeID(barValue) == AXUIElementGetTypeID()
         else {
             return .unavailable("No accessible extras menu bar")
         }
 
+        // Validated against the CoreFoundation runtime type before conversion.
+        // swiftlint:disable:next force_cast
+        let bar = barValue as! AXUIElement
         let candidates = children(of: bar).map { element in
             Candidate(
                 element: element,
@@ -198,8 +202,8 @@ enum IceBarAccessibilityClicker {
         var origin = CGPoint.zero
         var dimensions = CGSize.zero
         guard
-            AXValueGetValue(positionValue as AXValue, .cgPoint, &origin),
-            AXValueGetValue(sizeValue as AXValue, .cgSize, &dimensions)
+            AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin), // swiftlint:disable:this force_cast
+            AXValueGetValue(sizeValue as! AXValue, .cgSize, &dimensions) // swiftlint:disable:this force_cast
         else {
             return nil
         }
