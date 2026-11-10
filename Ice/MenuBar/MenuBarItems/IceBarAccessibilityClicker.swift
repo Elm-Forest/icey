@@ -262,12 +262,23 @@ enum IceBarAccessibilityClicker {
                 return .unavailable("No visible Control Center entry")
             }
         }
-        let details = Bundle(url: bundleURL)?.localizedString(forKey: "show details", value: nil, table: nil) ?? "show details"
+        guard let bundle = Bundle(url: bundleURL) else { return .unavailable("Missing Control Center resources") }
+        var names = [bundle.localizedString(forKey: "show details", value: nil, table: nil)]
+        if #available(macOS 15.4, *) {
+            names.append(bundle.localizedString(
+                forKey: "show details",
+                value: nil,
+                table: nil,
+                localizations: Locale.preferredLanguages.map { Locale.Language(identifier: $0) }
+            ))
+        }
+        let detailActions = Set(names.map { "Name:\($0)" })
         for _ in 0..<5 {
             Thread.sleep(forTimeInterval: 0.08)
             guard let tile = control("controlcenter-wifi") else { continue }
             guard let action = actionNames(of: tile).first(where: {
-                $0.components(separatedBy: "\n").first == "Name:\(details)"
+                guard let name = $0.components(separatedBy: "\n").first else { return false }
+                return detailActions.contains(name)
             }), AXUIElementPerformAction(tile, action as CFString) == .success else {
                 return .unavailable("Wi-Fi detail action unavailable")
             }
