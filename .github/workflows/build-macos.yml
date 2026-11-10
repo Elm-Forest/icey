@@ -25,14 +25,22 @@ jobs:
       - name: Build Release (ad-hoc signed)
         shell: bash
         run: |
-          set -o pipefail
+          set +e
           xcodebuild -project Ice.xcodeproj -scheme Ice -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/icey-derived" build \
             ENABLE_HARDENED_RUNTIME=NO CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
-            CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES ARCHS=arm64 \
             DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
-            | tee "$RUNNER_TEMP/icey-build.log" | tail -n 80
+            > "$RUNNER_TEMP/icey-build.log" 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then
+            echo "=== Compiler errors ==="
+            grep -nE 'error:|fatal error:|BUILD FAILED' "$RUNNER_TEMP/icey-build.log" | tail -n 70 || true
+          fi
+          echo "=== End of build log ==="
+          tail -n 35 "$RUNNER_TEMP/icey-build.log"
+          exit "$result"
       - name: Verify and package
         shell: bash
         run: |
