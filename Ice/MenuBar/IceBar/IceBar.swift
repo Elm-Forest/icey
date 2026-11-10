@@ -592,6 +592,7 @@ private struct IceBarItemView: View {
             guard let itemManager, let menuBarManager else {
                 return
             }
+            let point = NSEvent.mouseLocation
             let iceBarDisplayID = menuBarManager.iceBarPanel.screen?.displayID
             menuBarManager.section(withName: section)?.hide()
             Task {
@@ -609,9 +610,7 @@ private struct IceBarItemView: View {
                     }
                     return
                 }
-                if !(await IceBarAccessibilityClicker.click(item: item, mouseButton: .left)) {
-                    NSSound.beep()
-                }
+                await IceBarAccessibilityClicker.click(item: item, mouseButton: .left, at: point)
             }
         }
     }
@@ -621,6 +620,7 @@ private struct IceBarItemView: View {
             guard let itemManager, let menuBarManager else {
                 return
             }
+            let point = NSEvent.mouseLocation
             let iceBarDisplayID = menuBarManager.iceBarPanel.screen?.displayID
             menuBarManager.section(withName: section)?.hide()
             Task {
@@ -638,9 +638,7 @@ private struct IceBarItemView: View {
                     }
                     return
                 }
-                if !(await IceBarAccessibilityClicker.click(item: item, mouseButton: .right)) {
-                    NSSound.beep()
-                }
+                await IceBarAccessibilityClicker.click(item: item, mouseButton: .right, at: point)
             }
         }
     }

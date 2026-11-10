@@ -12,20 +12,28 @@ import OSLog
 /// rearrange the user's other status items when the menu bar is full.
 @MainActor
 enum IceBarAccessibilityClicker {
-    private static let logger = Logger(category: "IceBarAccessibilityClicker")
+    private nonisolated static let logger = Logger(category: "IceBarAccessibilityClicker")
     private static var activationInProgress = false
 
-    static func click(item: MenuBarItem, mouseButton: CGMouseButton) async -> Bool {
+    static func click(item: MenuBarItem, mouseButton: CGMouseButton, at point: CGPoint) async {
         // Do not interleave operations on two status items while the target
         // process is handling a potentially modal Accessibility action.
         guard !activationInProgress else {
             logger.notice("An Ice Bar item activation is already in progress")
-            return false
+            return
         }
         activationInProgress = true
         defer { activationInProgress = false }
         let pid = item.sourcePID ?? item.ownerPID
-        let bounds = Bridging.getWindowBounds(for: item.windowID) ?? item.bounds
+        guard let window = WindowInfo(windowID: item.windowID), window.ownerPID == item.ownerPID else {
+            showUnavailable(for: item, at: point)
+            return
+        }
+        let bounds = window.bounds
+        let displays = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
+        let bundle = item.sourceApplication?.bundleURL
+        let isICopy = item.tag.namespace == .string("cn.better365.iCopy")
+        let isWiFi = item.tag.namespace == .controlCenter && item.tag.title == "WiFi"
         let title = item.title
         let tagTitle = item.tag.title
         let action = mouseButton == .right ? kAXShowMenuAction as String : kAXPressAction as String
@@ -39,30 +47,43 @@ enum IceBarAccessibilityClicker {
                     bounds: bounds,
                     title: title,
                     tagTitle: tagTitle,
-                    action: action
+                    action: action,
+                    displays: displays,
+                    isICopy: isICopy,
+                    wifiBundle: isWiFi ? bundle : nil
                 )
                 continuation.resume(returning: outcome)
             }
         }
 
         switch outcome {
-        case .success:
-            logger.debug("Activated \(item.logString, privacy: .public) using \(action, privacy: .public) without moving it")
-            return true
-        case .indeterminate:
-            // A timed-out AX action is not proof of a successful click.
-            // Callers must not silently dismiss this failure as success.
-            logger.error("Accessibility activation was not confirmed for \(item.logString, privacy: .public)")
-            return false
+        case .visible:
+            logger.debug("Observed a visible interface for \(item.logString, privacy: .public)")
+        case .commands(let entries):
+            let menu = IceBarCommandMenu()
+            guard let command = menu.choose(from: entries, at: point) else { return }
+            let result = await Task.detached {
+                AXUIElementPerformAction(command, kAXPressAction as CFString)
+            }.value
+            if result != .success {
+                logger.error("Menu command for \(item.logString, privacy: .public) returned \(result.rawValue)")
+                showUnavailable(for: item, at: point)
+            }
         case .unavailable(let reason):
-            logger.error("Could not activate \(item.logString, privacy: .public) without moving it: \(reason, privacy: .public)")
-            return false
+            logger.notice("No visible interface for \(item.logString, privacy: .public): \(reason, privacy: .public)")
+            showUnavailable(for: item, at: point)
         }
     }
 
+    private static func showUnavailable(for item: MenuBarItem, at point: CGPoint) {
+        let menu = NSMenu(title: item.displayName)
+        menu.addItem(withTitle: String(localized: "Couldn’t open \(item.displayName) here"), action: nil, keyEquivalent: "")
+        menu.popUp(positioning: nil, at: point, in: nil)
+    }
+
     private enum Outcome {
-        case success
-        case indeterminate
+        case visible
+        case commands([IceBarCommandMenu.Entry])
         case unavailable(String)
     }
 
@@ -77,7 +98,10 @@ enum IceBarAccessibilityClicker {
         bounds: CGRect,
         title: String?,
         tagTitle: String,
-        action: String
+        action: String,
+        displays: [CGRect],
+        isICopy: Bool,
+        wifiBundle: URL?
     ) -> Outcome {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.5)
@@ -110,74 +134,150 @@ enum IceBarAccessibilityClicker {
             return .unavailable("No unique accessibility item matched the status window")
         }
 
-        // Keep a before/after snapshot: some NSStatusItem accessibility
-        // actions return cannotComplete when opening a modal popup. A timeout
-        // without a newly displayed interface is not success.
-        let originalWindows = onScreenWindowIDs(ownerPID: pid)
-        AXUIElementSetMessagingTimeout(candidate.element, 1)
-        var result = AXUIElementPerformAction(candidate.element, action as CFString)
-        if result == .success {
-            return .success
+        // iCopy exposes its menu even while closed. On Sequoia both mouse
+        // buttons open this same menu thousands of points off the display.
+        if isICopy, let menu = children(of: candidate.element).first(where: { role($0) == kAXMenuRole }) {
+            var budget = 128
+            if let entries = entries(in: menu, budget: &budget), !entries.isEmpty {
+                return .commands(entries)
+            }
         }
-        if aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
-            return .success
+        if let wifiBundle, candidate.names.contains("com.apple.menuextra.wifi") {
+            return openWiFi(app: app, candidates: candidates, bundleURL: wifiBundle, displays: displays)
         }
 
-        // Some items expose the actionable button one level under the menu
-        // bar item. Only try it if there is one unambiguous child and there
-        // was no observable interface from the initial action.
+        // A successful AX call can open an invisible menu. Conversely, a
+        // modal menu can time out the call that opened it. Record both facts.
+        let before = Set(interfaceWindows(pid: pid).map(\.windowID))
         let nested = children(of: candidate.element)
-        if nested.count == 1 {
-            AXUIElementSetMessagingTimeout(nested[0], 1)
-            result = AXUIElementPerformAction(nested[0], action as CFString)
-            if result == .success || aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
-                return .success
-            }
-        }
-
-        // AXPress and AXShowMenu are distinct actions. Some menu-only apps
-        // implement one but not the other; try AXShowMenu only when AXPress
-        // failed and no interface was observed, without rearranging icons.
-        if action == kAXPressAction as String {
-            AXUIElementSetMessagingTimeout(candidate.element, 1)
-            result = AXUIElementPerformAction(candidate.element, kAXShowMenuAction as CFString)
-            if result == .success || aNewInterfaceAppeared(ownerPID: pid, before: originalWindows) {
-                return .success
-            }
-        }
-
-        switch result {
-        case .cannotComplete: return .indeterminate
-        default: return .unavailable("AX action returned \(result.rawValue)")
-        }
-    }
-
-    /// A target app can display its menu while the AX action is blocked in
-    /// its run loop; look for new on-screen windows before retrying.
-    private nonisolated static func onScreenWindowIDs(ownerPID: pid_t) -> Set<CGWindowID> {
-        let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] ?? []
-        return Set(windows.compactMap { info in
-            guard
-                let pid = info[kCGWindowOwnerPID as String] as? pid_t,
-                pid == ownerPID,
-                let number = info[kCGWindowNumber as String] as? CGWindowID
-            else {
-                return nil
-            }
-            return number
-        })
-    }
-
-    private nonisolated static func aNewInterfaceAppeared(
-        ownerPID: pid_t,
-        before: Set<CGWindowID>
-    ) -> Bool {
-        // Give the target process a short grace period to create its popup.
+        let targets = [candidate.element] + (nested.count == 1 && role(nested[0]) != kAXMenuRole ? nested : [])
+        let actions = action == kAXPressAction ? [action, kAXShowMenuAction as String] : [action]
+        let supported = targets.map { ($0, actionNames(of: $0)) }
+        guard let (target, requested) = actions.compactMap({ name in
+            supported.first { $0.1.contains(name) }.map { ($0.0, name) }
+        }).first else { return .unavailable("Requested action is not supported") }
+        AXUIElementSetMessagingTimeout(target, 1)
+        let result = AXUIElementPerformAction(target, requested as CFString)
         Thread.sleep(forTimeInterval: 0.15)
-        return !onScreenWindowIDs(ownerPID: ownerPID).subtracting(before).isEmpty
+        let appeared = interfaceWindows(pid: pid).filter { !before.contains($0.windowID) }
+        let visible = appeared.filter { window in
+            displays.contains { $0.contains(CGPoint(x: window.bounds.midX, y: window.bounds.midY)) }
+        }
+        logger.info("Status item pid=\(pid) action=\(requested, privacy: .public) AX=\(result.rawValue) newVisibleWindows=\(visible.count)")
+        if result == .success, !visible.isEmpty {
+            return .visible
+        }
+        // Do not send a second click: the first can already be tracking an offscreen menu.
+        if result == .success || result == .cannotComplete,
+           let menu = children(of: candidate.element).first(where: { role($0) == kAXMenuRole }),
+           let rect = frame(of: menu),
+           let popup = appeared.first(where: { $0.layer > Int(CGWindowLevelForKey(.statusWindow)) && $0.bounds.intersects(rect) }) {
+            // A visible window corresponding to this very AXMenu is independent
+            // evidence that the app opened it, even when AXPress timed out.
+            if visible.contains(where: { $0.windowID == popup.windowID }) { return .visible }
+            guard AXUIElementPerformAction(menu, kAXCancelAction as CFString) == .success else {
+                return .unavailable("Could not dismiss the offscreen menu")
+            }
+            var budget = 128
+            if let entries = entries(in: menu, budget: &budget), !entries.isEmpty {
+                return .commands(entries)
+            }
+        }
+        return .unavailable("AX action returned \(result.rawValue), no visible response confirmed")
+    }
+
+    private nonisolated static func interfaceWindows(pid: pid_t) -> [WindowInfo] {
+        WindowInfo.createWindows(option: .onScreen).filter {
+            $0.ownerPID == pid && $0.layer != Int(CGWindowLevelForKey(.statusWindow))
+        }
+    }
+
+    private nonisolated static func actionNames(of element: AXUIElement) -> [String] {
+        var actions: CFArray?
+        AXUIElementCopyActionNames(element, &actions)
+        return actions as? [String] ?? []
+    }
+
+    private nonisolated static func role(_ element: AXUIElement) -> String? {
+        string(of: element, attribute: kAXRoleAttribute)
+    }
+
+    private nonisolated static func entries(in menu: AXUIElement, budget: inout Int) -> [IceBarCommandMenu.Entry]? {
+        var entries = [IceBarCommandMenu.Entry]()
+        for child in children(of: menu) {
+            guard budget > 0, role(child) == kAXMenuItemRole else { return nil }
+            budget -= 1
+            let nested = children(of: child)
+            var submenu = [IceBarCommandMenu.Entry]()
+            if !nested.isEmpty {
+                guard
+                    nested.count == 1, role(nested[0]) == kAXMenuRole,
+                    let rows = self.entries(in: nested[0], budget: &budget), !rows.isEmpty
+                else { return nil }
+                submenu = rows
+            }
+            var enabled: CFTypeRef?
+            AXUIElementCopyAttributeValue(child, kAXEnabledAttribute as CFString, &enabled)
+            let title = string(of: child, attribute: kAXTitleAttribute) ?? ""
+            let isEnabled = enabled as? Bool == true
+            guard !title.isEmpty || !isEnabled else { return nil }
+            entries.append(.init(
+                title: title,
+                enabled: isEnabled,
+                marked: !(string(of: child, attribute: kAXMenuItemMarkCharAttribute) ?? "").isEmpty,
+                element: child,
+                submenu: submenu
+            ))
+        }
+        return entries
+    }
+
+    /// Open Control Center's visible Wi-Fi detail view. The tile's ordinary
+    /// press toggles the radio, so only invoke its advertised details action.
+    private nonisolated static func openWiFi(
+        app: AXUIElement,
+        candidates: [Candidate],
+        bundleURL: URL,
+        displays: [CGRect]
+    ) -> Outcome {
+        func controls() -> [AXUIElement] {
+            var windows: CFTypeRef?
+            AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows)
+            return (windows as? [AXUIElement] ?? []).filter { window in
+                guard let rect = frame(of: window) else { return false }
+                return displays.contains { $0.contains(CGPoint(x: rect.midX, y: rect.midY)) }
+            }.flatMap { children(of: $0) }.flatMap { children(of: $0) }
+        }
+        func control(_ identifier: String) -> AXUIElement? {
+            controls().first { string(of: $0, attribute: kAXIdentifierAttribute) == identifier }
+        }
+
+        if control("wifi-header") != nil { return .visible }
+        if control("controlcenter-wifi") == nil {
+            guard let entry = candidates.first(where: { candidate in
+                guard let frame = candidate.frame else { return false }
+                return candidate.names.contains("com.apple.menuextra.controlcenter") &&
+                    displays.contains { $0.contains(CGPoint(x: frame.midX, y: frame.midY)) }
+            }), AXUIElementPerformAction(entry.element, kAXPressAction as CFString) == .success else {
+                return .unavailable("No visible Control Center entry")
+            }
+        }
+        let details = Bundle(url: bundleURL)?.localizedString(forKey: "show details", value: nil, table: nil) ?? "show details"
+        for _ in 0..<5 {
+            Thread.sleep(forTimeInterval: 0.08)
+            guard let tile = control("controlcenter-wifi") else { continue }
+            guard let action = actionNames(of: tile).first(where: {
+                $0.components(separatedBy: "\n").first == "Name:\(details)"
+            }), AXUIElementPerformAction(tile, action as CFString) == .success else {
+                return .unavailable("Wi-Fi detail action unavailable")
+            }
+            for _ in 0..<5 {
+                Thread.sleep(forTimeInterval: 0.08)
+                if control("wifi-header") != nil { return .visible }
+            }
+            break
+        }
+        return .unavailable("Wi-Fi detail view did not appear on a display")
     }
 
     private nonisolated static func matching(
