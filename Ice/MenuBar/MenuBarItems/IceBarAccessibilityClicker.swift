@@ -71,26 +71,37 @@ enum IceBarAccessibilityClicker {
             }
         case .unavailable(let reason):
             logger.notice("No visible interface for \(item.logString, privacy: .public): \(reason, privacy: .public)")
-            // A normal desktop app may use its status item to reopen its main
-            // window rather than show a menu. The offscreen status item does
-            // not always deliver that event, even when AXPress succeeds.
-            // Reopen only regular apps on a left click, never move the icon.
-            if mouseButton == .left, await reopenDesktopApplication(for: item) {
+            // Some status items reopen a desktop window rather than show a
+            // menu. This also applies to accessory (LSUIElement) apps such as
+            // Nutstore and G HUB. Try the normal application-open path only
+            // after AX did not show a menu, and never move the hidden icon.
+            if mouseButton == .left, await reopenApplicationWindow(for: item) {
                 return
             }
             showUnavailable(for: item, at: point)
         }
     }
 
-    /// Reopen an ordinary app through Launch Services if its hidden status
-    /// item did not produce a visible interface. This intentionally excludes
-    /// accessory/background apps and right-click actions: a status-only
-    /// utility's menu is not interchangeable with its application window.
-    private static func reopenDesktopApplication(for item: MenuBarItem) async -> Bool {
+    /// After an offscreen AX activation fails, request the application's
+    /// normal open behavior. Accessory apps can own real windows, or can
+    /// launch a nested UI app (for example, Logitech G HUB's lghub_ui.app).
+    /// We only count success when a related *frontmost* process has a
+    /// substantial, on-screen application window.
+    private static func reopenApplicationWindow(for item: MenuBarItem) async -> Bool {
         guard
             let application = item.sourceApplication ?? item.owningApplication,
-            application.activationPolicy == .regular,
+            application.activationPolicy == .regular || application.activationPolicy == .accessory,
             let bundleURL = application.bundleURL
+        else {
+            return false
+        }
+
+        // Don't invoke a system service's bundle merely because its
+        // menu bar accessibility action was not supported.
+        let bundlePath = bundleURL.standardizedFileURL.path
+        guard
+            bundleURL.pathExtension == "app",
+            !bundlePath.hasPrefix("/System/")
         else {
             return false
         }
@@ -103,26 +114,39 @@ enum IceBarAccessibilityClicker {
                 at: bundleURL,
                 configuration: configuration
             )
-            // The Launch Services request can succeed without an app
-            // actually presenting a window. Verify the observable result.
-            for _ in 0..<12 {
-                let displays = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
-                let hasMainWindow = WindowInfo.createWindows(option: .onScreen).contains { window in
-                    window.ownerPID == reopened.processIdentifier &&
-                        window.layer == 0 &&
-                        displays.contains { $0.intersects(window.bounds) } &&
-                        window.bounds.width > 80 &&
-                        window.bounds.height > 60
-                }
-                if hasMainWindow, reopened.isActive {
-                    logger.notice("Reopened desktop application \(application.bundleIdentifier ?? "unknown", privacy: .public) from Ice Bar")
-                    return true
+
+            // A tray application can delegate its GUI to another process.
+            // Accept only the reopened app or a nested app within its bundle,
+            // and only when that process actually owns a foreground window.
+            for _ in 0..<30 {
+                guard !Task.isCancelled else { return false }
+                let foreground = NSWorkspace.shared.frontmostApplication
+                if let foreground,
+                   let foregroundURL = foreground.bundleURL {
+                    let foregroundPath = foregroundURL.standardizedFileURL.path
+                    let isRelated = foreground.processIdentifier == reopened.processIdentifier ||
+                        foregroundPath == bundlePath ||
+                        foregroundPath.hasPrefix(bundlePath + "/")
+                    if isRelated {
+                        let displays = NSScreen.screens.map { CGDisplayBounds($0.displayID) }
+                        let hasWindow = WindowInfo.createWindows(option: .onScreen).contains { window in
+                            window.ownerPID == foreground.processIdentifier &&
+                                window.layer == 0 &&
+                                displays.contains { $0.intersects(window.bounds) } &&
+                                window.bounds.width > 80 &&
+                                window.bounds.height > 60
+                        }
+                        if hasWindow {
+                            logger.notice("Opened application window for \(item.logString, privacy: .public) (foreground pid=\(foreground.processIdentifier, privacy: .public))")
+                            return true
+                        }
+                    }
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            logger.warning("Launch Services returned but no active desktop window appeared for \(item.logString, privacy: .public)")
+            logger.warning("Application reopened but no related foreground window was observed for \(item.logString, privacy: .public)")
         } catch {
-            logger.error("Could not reopen desktop application for \(item.logString, privacy: .public): \(error, privacy: .public)")
+            logger.error("Could not reopen application for \(item.logString, privacy: .public): \(error, privacy: .public)")
         }
         return false
     }
